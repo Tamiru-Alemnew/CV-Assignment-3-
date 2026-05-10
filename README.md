@@ -1,13 +1,7 @@
-# =============================================================================
+
 # Assignment 3 — Deep Learning for Computer Vision
 # ZFNet & LeNet-5 Implementation
 #
-# Group 2:
-#   Abenezer Seifu     UGR/6499/14
-#   Tamiru Alemnew     UGR/5857/14
-#   Yohannes Alemayehu UGR/2497/14
-# =============================================================================
-
 ## Project Structure
 
 ```
