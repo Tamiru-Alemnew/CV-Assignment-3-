@@ -1,25 +1,4 @@
-# =============================================================================
-# main.py — End-to-end pipeline: LeNet-5 + ZFNet on CIFAR-10
-# Authors : Abenezer Seifu  (UGR/6499/14)
-#           Tamiru Alemnew  (UGR/5857/14)
-#           Yohannes Alemayehu (UGR/2497/14)
-# Group   : 2
-#
-# This script ties together:
-#   1) lenet5.py   — 32×32 CIFAR pipeline + LeNet-5
-#   2) zfnet.py    — 224×224 upsampled CIFAR + ZFNet
-#   3) Comparison plots + JSON histories under outputs/
-#
-# Usage:
-#   python main.py             # Train both models, then compare
-#   python main.py --lenet     # LeNet-5 only
-#   python main.py --zfnet     # ZFNet only
-#   python main.py --compare   # Load saved JSON histories and plot only
-#
-# Tensor flow summary:
-#   LeNet-5:  batches [N, 3, 32, 32]  -> logits [N, 10]
-#   ZFNet:    batches [N, 3, 224, 224] -> logits [N, 10]
-# =============================================================================
+"""End-to-end LeNet-5 and ZFNet training pipeline for CIFAR-10."""
 
 import argparse
 import json
@@ -27,7 +6,6 @@ import os
 
 import torch
 
-# LeNet-5 stack (native CIFAR resolution)
 from lenet5 import (
     LeNet5,
     get_cifar10_loaders,
@@ -37,7 +15,6 @@ from lenet5 import (
     count_parameters,
 )
 
-# ZFNet stack (upsampled CIFAR)
 from zfnet import (
     ZFNet,
     get_cifar10_loaders_zfnet,
@@ -48,7 +25,6 @@ from zfnet import (
     show_sample_predictions as show_zf_predictions,
 )
 
-# Device shared by both models in this process (CUDA if available).
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 

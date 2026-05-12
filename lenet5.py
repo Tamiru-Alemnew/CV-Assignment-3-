@@ -1,82 +1,26 @@
-# =============================================================================
-# LeNet-5 Implementation — Deep Learning for Computer Vision, Assignment 3
-# Authors : Abenezer Seifu  (UGR/6499/14)
-#           Tamiru Alemnew  (UGR/5857/14)
-#           Yohannes Alemayehu (UGR/2497/14)
-# Group   : 2
-# Dataset : CIFAR-10 (native 32×32 RGB — matches LeNet-5 spatial size)
-# Framework: PyTorch
-# =============================================================================
-#
-# TENSOR CONVENTIONS (used throughout this file)
-# ----------------------------------------------
-# - Batch dimension is always first: NCHW layout
-#   * N = batch size
-#   * C = channels (3 for RGB)
-#   * H, W = height and width in pixels
-# - A batch of CIFAR-10 images after ToTensor() has dtype float32 and shape:
-#     images:  [N, 3, 32, 32]
-#     labels:  [N]  (integer class index 0..9)
-# - Model logits (pre-softmax) shape: [N, num_classes] — here [N, 10]
-#
-# ARCHITECTURE OVERVIEW
-# ---------------------
-# LeNet-5 (LeCun et al., 1998) is a 7-layer CNN originally designed for
-# handwritten digit recognition on 32x32 grayscale images. We adapt it here
-# for CIFAR-10 (32x32 RGB images, 10 classes) by changing the input channels
-# from 1 (grayscale) to 3 (RGB).
-#
-# Original Paper:
-#   LeCun, Y., et al. (1998). Gradient-based learning applied to document
-#   recognition. Proceedings of the IEEE, 86(11), 2278-2324.
-# =============================================================================
+"""LeNet-5 training pipeline for CIFAR-10."""
 
-# --- Standard library & third-party imports ---------------------------------
-# torch: core tensors, autograd, neural network modules, optimizers
 import torch
-# nn: Module, Conv2d, Linear, pooling, activations (building blocks of LeNet-5)
 import torch.nn as nn
-# optim: SGD and learning-rate schedulers used in the training orchestration
 import torch.optim as optim
-# torchvision: ready-made CIFAR-10 dataset class
 import torchvision
-# transforms: PIL Image -> tensor, augmentation, per-channel normalization
 import torchvision.transforms as transforms
-# DataLoader: batches samples into (images, labels) pairs for training/eval loops
 from torch.utils.data import DataLoader
-# matplotlib: plot loss/accuracy curves and qualitative prediction grids
 import matplotlib.pyplot as plt
-# numpy: fixed random seed alongside torch for reproducibility
 import numpy as np
-# os: create checkpoint directories on disk
 import os
 
-# --- Dataset normalization constants (CIFAR-10 train-set statistics) ----------
-# These values zero-center and scale each RGB channel so gradients are stable.
-# Shape context: Normalize applies per channel; after it, each channel has
-# approximately zero mean and unit variance across the training distribution.
 CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
 CIFAR10_STD = (0.2470, 0.2435, 0.2616)
 
-# --- Reproducibility ----------------------------------------------------------
-# Setting a fixed seed makes weight init and DataLoader order comparable across
-# runs (exact bitwise reproducibility on GPU may still vary by CUDA version).
 torch.manual_seed(42)
 np.random.seed(42)
 
-# --- Device selection ---------------------------------------------------------
-# CUDA GPU accelerates convolutions; CPU is the portable fallback.
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"[INFO] Using device: {device}")
 
-# How many subprocesses prefetch batches (set NUM_WORKERS=0 in environment on
-# Windows if DataLoader workers hang).
 _NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "2"))
 
-
-# =============================================================================
-# SECTION 1: MODEL DEFINITION
-# =============================================================================
 
 class LeNet5(nn.Module):
     """
@@ -111,13 +55,6 @@ class LeNet5(nn.Module):
         """
         super(LeNet5, self).__init__()
 
-        # -----------------------------------------------------------------
-        # BLOCK 1: C1 — first convolutional layer
-        # Role: extract low-level features (edges, color blobs) with shared
-        #       weights across space (parameter efficiency vs. fully-connected).
-        # Input tensor : [B, 3, 32, 32]   (RGB CIFAR-10)
-        # Output tensor: [B, 6, 28, 28]   (6 feature maps; 32 - 5 + 1 = 28)
-        # -----------------------------------------------------------------
         self.c1 = nn.Conv2d(
             in_channels=3,
             out_channels=6,
@@ -126,20 +63,8 @@ class LeNet5(nn.Module):
             padding=0,
         )
 
-        # -----------------------------------------------------------------
-        # BLOCK 2: S2 — average pooling (subsampling / downsampling)
-        # Role: reduce spatial size, add local translation tolerance; LeNet-5
-        #       used learned subsampling; we use fixed 2x2 average pooling.
-        # Input tensor : [B, 6, 28, 28]
-        # Output tensor: [B, 6, 14, 14]   (each dimension halved: 28/2)
-        # -----------------------------------------------------------------
         self.s2 = nn.AvgPool2d(kernel_size=2, stride=2)
 
-        # -----------------------------------------------------------------
-        # BLOCK 3: C3 — second convolution
-        # Input tensor : [B, 6, 14, 14]
-        # Output tensor: [B, 16, 10, 10]  (14 - 5 + 1 = 10)
-        # -----------------------------------------------------------------
         self.c3 = nn.Conv2d(
             in_channels=6,
             out_channels=16,
@@ -148,20 +73,8 @@ class LeNet5(nn.Module):
             padding=0,
         )
 
-        # -----------------------------------------------------------------
-        # BLOCK 4: S4 — second average pool
-        # Input tensor : [B, 16, 10, 10]
-        # Output tensor: [B, 16, 5, 5]
-        # -----------------------------------------------------------------
         self.s4 = nn.AvgPool2d(kernel_size=2, stride=2)
 
-        # -----------------------------------------------------------------
-        # BLOCK 5: C5 — convolution with kernel equal to spatial size
-        # Role: equivalent to a fully-connected layer from 16*5*5 = 400 inputs
-        #       to 120 outputs, but implemented as Conv2d for historical fidelity.
-        # Input tensor : [B, 16, 5, 5]
-        # Output tensor: [B, 120, 1, 1]
-        # -----------------------------------------------------------------
         self.c5 = nn.Conv2d(
             in_channels=16,
             out_channels=120,
@@ -170,23 +83,8 @@ class LeNet5(nn.Module):
             padding=0,
         )
 
-        # -----------------------------------------------------------------
-        # BLOCK 6: F6 — fully connected (dense) hidden layer
-        # Input tensor : [B, 120]  (after flattening C5 output)
-        # Output tensor: [B, 84]
-        # -----------------------------------------------------------------
         self.f6 = nn.Linear(in_features=120, out_features=84)
-
-        # -----------------------------------------------------------------
-        # BLOCK 7: Output — classification logits
-        # Input tensor : [B, 84]
-        # Output tensor: [B, num_classes]  e.g. [B, 10]
-        # No softmax here: nn.CrossEntropyLoss expects raw logits.
-        # -----------------------------------------------------------------
         self.output = nn.Linear(in_features=84, out_features=num_classes)
-
-        # Tanh squashes activations to (-1, 1); saturates for large magnitudes
-        # but matches the 1998 architecture.
         self.tanh = nn.Tanh()
 
     def forward(self, x):
@@ -199,36 +97,17 @@ class LeNet5(nn.Module):
         Returns:
             Logits tensor [B, num_classes] for use with CrossEntropyLoss.
         """
-        # C1 + tanh: [B,3,32,32] -> [B,6,28,28]
         x = self.tanh(self.c1(x))
-
-        # S2: [B,6,28,28] -> [B,6,14,14]
         x = self.s2(x)
-
-        # C3 + tanh: [B,6,14,14] -> [B,16,10,10]
         x = self.tanh(self.c3(x))
-
-        # S4: [B,16,10,10] -> [B,16,5,5]
         x = self.s4(x)
-
-        # C5 + tanh: [B,16,5,5] -> [B,120,1,1]
         x = self.tanh(self.c5(x))
-
-        # Flatten spatial dims: [B,120,1,1] -> [B,120]
         x = x.view(x.size(0), -1)
-
-        # F6 + tanh: [B,120] -> [B,84]
         x = self.tanh(self.f6(x))
-
-        # Linear readout: [B,84] -> [B,10] (logits)
         x = self.output(x)
 
         return x
 
-
-# =============================================================================
-# SECTION 2: DATA LOADING AND PREPROCESSING
-# =============================================================================
 
 def get_cifar10_loaders(batch_size=128):
     """
@@ -256,22 +135,16 @@ def get_cifar10_loaders(batch_size=128):
         test_loader: same tensor shapes, shuffle=False
     """
 
-    # --- Training transforms ------------------------------------------------
     train_transform = transforms.Compose(
         [
-            # Optional explicit size (identity for CIFAR); clarifies 32×32 contract.
             transforms.Resize((32, 32)),
-            # Pad 32→40, then random crop back to 32×32 (small translations).
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
-            # PIL Image -> Tensor shape [3, 32, 32], values in [0, 1]
             transforms.ToTensor(),
-            # Per-channel standardization; output still [3, 32, 32]
             transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD),
         ]
     )
 
-    # --- Test transforms (no randomness) ------------------------------------
     test_transform = transforms.Compose(
         [
             transforms.Resize((32, 32)),
@@ -280,7 +153,6 @@ def get_cifar10_loaders(batch_size=128):
         ]
     )
 
-    # --- Datasets: download once under ./data --------------------------------
     train_dataset = torchvision.datasets.CIFAR10(
         root="./data", train=True, download=True, transform=train_transform
     )
@@ -288,8 +160,6 @@ def get_cifar10_loaders(batch_size=128):
         root="./data", train=False, download=True, transform=test_transform
     )
 
-    # pin_memory=True speeds host→GPU copies when CUDA is used; on CPU-only
-    # machines it should be False to avoid warnings/errors on some setups.
     _pin = torch.cuda.is_available()
 
     train_loader = DataLoader(
@@ -316,10 +186,6 @@ def get_cifar10_loaders(batch_size=128):
     return train_loader, test_loader
 
 
-# =============================================================================
-# SECTION 3: TRAINING AND EVALUATION LOOPS
-# =============================================================================
-
 def train_one_epoch(model, loader, criterion, optimizer, device):
     """
     One full pass over the training set (one epoch).
@@ -340,14 +206,13 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
         avg_loss: mean cross-entropy over batches
         accuracy: % of training labels matched by argmax(logits)
     """
-    model.train()  # Training mode (no dropout in LeNet-5; included for generality)
+    model.train()
 
     running_loss = 0.0
     correct = 0
     total = 0
 
     for batch_idx, (images, labels) in enumerate(loader):
-        # images: [B, 3, 32, 32], labels: [B] — move to same device as model
         images = images.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
 
@@ -405,10 +270,6 @@ def evaluate(model, loader, criterion, device):
     accuracy = 100.0 * correct / max(total, 1)
     return avg_loss, accuracy
 
-
-# =============================================================================
-# SECTION 4: TRAINING ORCHESTRATION
-# =============================================================================
 
 def train_model(
     model,
@@ -488,10 +349,6 @@ def train_model(
     print(f"\n[DONE] Final Test Accuracy: {history['test_acc'][-1]:.2f}%")
     return history
 
-
-# =============================================================================
-# SECTION 5: VISUALIZATION
-# =============================================================================
 
 def plot_training_curves(history, model_name="LeNet-5", save_path=None):
     """
@@ -595,10 +452,6 @@ def show_sample_predictions(
     print(f"[INFO] Predictions figure saved to {save_path}")
     plt.show()
 
-
-# =============================================================================
-# SECTION 6: MAIN ENTRY POINT
-# =============================================================================
 
 def count_parameters(model):
     """Count trainable parameters (weights + biases) for complexity reporting."""

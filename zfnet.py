@@ -1,34 +1,4 @@
-# =============================================================================
-# ZFNet Implementation — Deep Learning for Computer Vision, Assignment 3
-# Authors : Abenezer Seifu  (UGR/6499/14)
-#           Tamiru Alemnew  (UGR/5857/14)
-#           Yohannes Alemayehu (UGR/2497/14)
-# Group   : 2
-# Dataset : CIFAR-10 (upsampled to 224×224 RGB for AlexNet/ZFNet-style stem)
-# Framework: PyTorch
-# =============================================================================
-#
-# TENSOR CONVENTIONS
-# ------------------
-# - Layout: NCHW (batch, channels, height, width).
-# - After ZFNet transforms, each image tensor has shape [3, 224, 224].
-# - Batched input to the network: [N, 3, 224, 224].
-# - Class logits: [N, num_classes] with num_classes=10 for CIFAR-10.
-#
-# ARCHITECTURE OVERVIEW
-# ---------------------
-# ZFNet refines AlexNet using insights from DeconvNet visualizations
-# (Zeiler & Fergus, ECCV 2014; ILSVRC 2013 entry).
-#
-# Key differences from AlexNet (early layers):
-#   - Conv1: 11×11 stride 4 → 7×7 stride 2 (less aliasing, finer features)
-#   - Conv2: different stride/padding pattern (see layer comments)
-# Conv3–5 channel widths match AlexNet: 384 / 384 / 256.
-#
-# Original Paper:
-#   Zeiler, M.D. & Fergus, R. (2014). Visualizing and Understanding
-#   Convolutional Networks. ECCV 2014, pp. 818-833.
-# =============================================================================
+"""ZFNet training pipeline for CIFAR-10."""
 
 import torch
 import torch.nn as nn
@@ -40,7 +10,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 
-# Same CIFAR-10 normalization as lenet5.py (must match for fair comparison).
 CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
 CIFAR10_STD = (0.2470, 0.2435, 0.2616)
 
@@ -52,10 +21,6 @@ print(f"[INFO] Using device: {device}")
 
 _NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "2"))
 
-
-# =============================================================================
-# SECTION 1: MODEL DEFINITION
-# =============================================================================
 
 class ZFNet(nn.Module):
     """
@@ -80,7 +45,6 @@ class ZFNet(nn.Module):
         super(ZFNet, self).__init__()
 
         self.features = nn.Sequential(
-            # Conv1 — see docstring for B,96,110,110 output shape.
             nn.Conv2d(
                 in_channels=3,
                 out_channels=96,
@@ -89,11 +53,8 @@ class ZFNet(nn.Module):
                 padding=1,
             ),
             nn.ReLU(inplace=True),
-            # Pool1: overlapping max pool; output [B,96,55,55]
             nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
-            # LRN: normalizes across channels at each spatial location.
             nn.LocalResponseNorm(size=5, alpha=0.0001, beta=0.75, k=2.0),
-            # Conv2: [B,96,55,55] -> [B,256,26,26]
             nn.Conv2d(
                 in_channels=96,
                 out_channels=256,
@@ -104,7 +65,6 @@ class ZFNet(nn.Module):
             nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
             nn.LocalResponseNorm(size=5, alpha=0.0001, beta=0.75, k=2.0),
-            # Conv3: [B,256,13,13] -> [B,384,13,13] (3×3 same-style pad)
             nn.Conv2d(
                 in_channels=256,
                 out_channels=384,
@@ -113,7 +73,6 @@ class ZFNet(nn.Module):
                 padding=1,
             ),
             nn.ReLU(inplace=True),
-            # Conv4: [B,384,13,13] -> [B,384,13,13]
             nn.Conv2d(
                 in_channels=384,
                 out_channels=384,
@@ -122,7 +81,6 @@ class ZFNet(nn.Module):
                 padding=1,
             ),
             nn.ReLU(inplace=True),
-            # Conv5: [B,384,13,13] -> [B,256,13,13]
             nn.Conv2d(
                 in_channels=384,
                 out_channels=256,
@@ -131,20 +89,16 @@ class ZFNet(nn.Module):
                 padding=1,
             ),
             nn.ReLU(inplace=True),
-            # Pool5: [B,256,13,13] -> [B,256,6,6]
             nn.MaxPool2d(kernel_size=3, stride=2, padding=0),
         )
 
         self.classifier = nn.Sequential(
-            # Dropout only active in train mode; identity in eval.
             nn.Dropout(p=0.5),
-            # [B,9216] after flatten — Linear maps to [B,4096]
             nn.Linear(256 * 6 * 6, 4096),
             nn.ReLU(inplace=True),
             nn.Dropout(p=0.5),
             nn.Linear(4096, 4096),
             nn.ReLU(inplace=True),
-            # Final logits [B, num_classes]
             nn.Linear(4096, num_classes),
         )
 
@@ -177,10 +131,6 @@ class ZFNet(nn.Module):
                 nn.init.normal_(m.weight, mean=0, std=0.01)
                 nn.init.constant_(m.bias, 0)
 
-
-# =============================================================================
-# SECTION 2: DATA LOADING AND PREPROCESSING
-# =============================================================================
 
 def get_cifar10_loaders_zfnet(batch_size=64):
     """
@@ -263,10 +213,6 @@ def get_cifar10_loaders_zfnet(batch_size=64):
     return train_loader, test_loader
 
 
-# =============================================================================
-# SECTION 3: TRAINING AND EVALUATION LOOPS
-# =============================================================================
-
 def train_one_epoch(model, loader, criterion, optimizer, device):
     """
     Single training epoch. Batch tensors:
@@ -327,10 +273,6 @@ def evaluate(model, loader, criterion, device):
     accuracy = 100.0 * correct / max(total, 1)
     return avg_loss, accuracy
 
-
-# =============================================================================
-# SECTION 4: TRAINING ORCHESTRATION
-# =============================================================================
 
 def train_model(
     model,
@@ -409,10 +351,6 @@ def train_model(
     print(f"\n[DONE] Best Test Accuracy: {best_acc:.2f}%")
     return history
 
-
-# =============================================================================
-# SECTION 5: VISUALIZATION
-# =============================================================================
 
 def plot_training_curves(history, model_name="ZFNet", save_path=None):
     """Plot train/test loss and accuracy vs. epoch (lists in history dict)."""
@@ -546,10 +484,6 @@ def compare_architectures(
     print(f"[INFO] Comparison plot saved to {save_path}")
     plt.show()
 
-
-# =============================================================================
-# SECTION 6: MAIN ENTRY POINT
-# =============================================================================
 
 def count_parameters(model):
     """Return and print total trainable parameter count."""

@@ -1,11 +1,6 @@
 # =============================================================================
 # Assignment 3 — Deep Learning for Computer Vision
 # ZFNet & LeNet-5 Implementation
-#
-# Group 2:
-#   Abenezer Seifu     UGR/6499/14
-#   Tamiru Alemnew     UGR/5857/14
-#   Yohannes Alemayehu UGR/2497/14
 # =============================================================================
 
 ## Project Structure
@@ -13,15 +8,18 @@
 ```
 project/
 │
-├── lenet5.py          # LeNet-5 model definition, training, evaluation
-├── zfnet.py           # ZFNet model definition, training, evaluation
-├── main.py            # Run both models and compare results
-├── requirements.txt   # Python dependencies
+├── lenet5.py                        # LeNet-5 (canonical annotated implementation)
+├── zfnet.py                         # ZFNet (canonical annotated implementation)
+├── main.py                          # CLI: full training + comparison
+├── Assignment3_CIFAR10_Walkthrough.ipynb  # Thin notebook: imports .py, demo epochs, plots
+├── requirements.txt                 # Python dependencies
 │
 ├── data/              # CIFAR-10 auto-downloaded here on first run
 ├── checkpoints/       # Saved model weights (.pth files)
 └── outputs/           # Training curves, plots, history JSON files
 ```
+
+**Notebook vs scripts:** The fully annotated code lives in `lenet5.py` and `zfnet.py`. The notebook is a **walkthrough** (markdown + imports + short runs). For full 50-epoch training, use `python main.py`.
 
 ---
 
@@ -66,6 +64,17 @@ python main.py --compare  # Uses saved history JSON files
 python lenet5.py    # Standalone LeNet-5
 python zfnet.py     # Standalone ZFNet
 ```
+
+### 6. Jupyter walkthrough (optional)
+
+```bash
+pip install -r requirements.txt   # includes jupyter / ipykernel
+jupyter notebook Assignment3_CIFAR10_Walkthrough.ipynb
+```
+
+Or open the `.ipynb` in VS Code / Cursor and select the project `venv` kernel.
+
+In the notebook, set `NUM_EPOCHS_LENET` / `NUM_EPOCHS_ZFNET` for a quick demo; ZFNet on CPU is slow at high epochs. Use **`python main.py`** for full training and `outputs/*_history.json` for report numbers.
 
 ---
 
