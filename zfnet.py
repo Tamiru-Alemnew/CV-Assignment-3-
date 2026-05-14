@@ -1,4 +1,4 @@
-"""ZFNet training pipeline for CIFAR-10."""
+"""Compact ZFNet-style training pipeline for STL-10."""
 
 import torch
 import torch.nn as nn
@@ -8,11 +8,13 @@ import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 import numpy as np
+import json
 import os
 
-CIFAR10_MEAN = (0.4914, 0.4822, 0.4465)
-CIFAR10_STD = (0.2470, 0.2435, 0.2616)
+STL10_MEAN = (0.507, 0.487, 0.441)
+STL10_STD = (0.267, 0.256, 0.276)
 
+# Keep runs reproducible for report figures and metric comparisons.
 torch.manual_seed(42)
 np.random.seed(42)
 
@@ -23,168 +25,143 @@ _NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "2"))
 
 
 class ZFNet(nn.Module):
-    """
-    ZFNet feature extractor + classifier, ImageNet-style, adapted to 10 classes.
+    """Compact ZFNet-style CNN for 64x64 STL-10 inputs."""
 
-    Spatial shape chain for input 224×224 (batch B omitted):
-        Conv1+ReLU:  [B, 96, 110, 110]
-        Pool1:       [B, 96, 55, 55]
-        LRN1:        [B, 96, 55, 55]
-        Conv2+ReLU:  [B, 256, 26, 26]
-        Pool2:       [B, 256, 13, 13]
-        LRN2:        [B, 256, 13, 13]
-        Conv3+ReLU:  [B, 384, 13, 13]
-        Conv4+ReLU:  [B, 384, 13, 13]
-        Conv5+ReLU:  [B, 256, 13, 13]
-        Pool5:       [B, 256, 6, 6]
-        Flatten:     [B, 9216]
-        FC path:     [B, 4096] → [B, 4096] → [B, num_classes]
-    """
+    def __init__(self, num_classes=10, input_size=64):
+        super().__init__()
+        self.input_size = input_size
 
-    def __init__(self, num_classes=10):
-        super(ZFNet, self).__init__()
-
+        # Convolutional feature extractor. BatchNorm stabilizes the deeper model
+        # and adaptive pooling keeps the classifier input size fixed.
         self.features = nn.Sequential(
             nn.Conv2d(
                 in_channels=3,
-                out_channels=96,
+                out_channels=64,
                 kernel_size=7,
                 stride=2,
-                padding=1,
+                padding=3,
             ),
+            nn.BatchNorm2d(64),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
-            nn.LocalResponseNorm(size=5, alpha=0.0001, beta=0.75, k=2.0),
             nn.Conv2d(
-                in_channels=96,
-                out_channels=256,
+                in_channels=64,
+                out_channels=128,
                 kernel_size=5,
                 stride=2,
-                padding=0,
+                padding=2,
             ),
+            nn.BatchNorm2d(128),
             nn.ReLU(inplace=True),
             nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
-            nn.LocalResponseNorm(size=5, alpha=0.0001, beta=0.75, k=2.0),
             nn.Conv2d(
-                in_channels=256,
-                out_channels=384,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            ),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(
-                in_channels=384,
-                out_channels=384,
-                kernel_size=3,
-                stride=1,
-                padding=1,
-            ),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(
-                in_channels=384,
+                in_channels=128,
                 out_channels=256,
                 kernel_size=3,
                 stride=1,
                 padding=1,
             ),
+            nn.BatchNorm2d(256),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2, padding=0),
+            nn.Conv2d(
+                in_channels=256,
+                out_channels=256,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            ),
+            nn.BatchNorm2d(256),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(
+                in_channels=256,
+                out_channels=192,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+            ),
+            nn.BatchNorm2d(192),
+            nn.ReLU(inplace=True),
         )
+        self.pool = nn.AdaptiveAvgPool2d((4, 4))
 
+        flatten_dim = self._infer_flatten_dim()
+
+        # Smaller fully connected head than the original ZFNet for CPU-friendly
+        # STL-10 training while preserving the conv-to-classifier structure.
         self.classifier = nn.Sequential(
-            nn.Dropout(p=0.5),
-            nn.Linear(256 * 6 * 6, 4096),
+            nn.Dropout(p=0.3),
+            nn.Linear(flatten_dim, 512),
             nn.ReLU(inplace=True),
-            nn.Dropout(p=0.5),
-            nn.Linear(4096, 4096),
-            nn.ReLU(inplace=True),
-            nn.Linear(4096, num_classes),
+            nn.Dropout(p=0.3),
+            nn.Linear(512, num_classes),
         )
 
         self._initialize_weights()
 
     def forward(self, x):
-        """
-        Args:
-            x: [B, 3, 224, 224] float tensor (normalized CIFAR upsampled).
-
-        Returns:
-            Logits [B, num_classes] for CrossEntropyLoss.
-        """
+        """Map `[batch, 3, 64, 64]` images to `[batch, num_classes]` logits."""
         x = self.features(x)
-        x = x.view(x.size(0), -1)
+        x = self.pool(x)
+        x = torch.flatten(x, 1)
         x = self.classifier(x)
         return x
 
+    def _infer_flatten_dim(self):
+        """Infer classifier input width from the current feature extractor."""
+        with torch.no_grad():
+            dummy = torch.zeros(1, 3, self.input_size, self.input_size)
+            feats = self.pool(self.features(dummy))
+            return feats.view(1, -1).size(1)
+
     def _initialize_weights(self):
-        """
-        Gaussian weight init (std=0.01) and zero biases for conv/linear layers.
-        Simpler than the original AlexNet paper but stable for student-scale runs.
-        """
+        """Initialize layers."""
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                nn.init.normal_(m.weight, mean=0, std=0.01)
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.Linear):
-                nn.init.normal_(m.weight, mean=0, std=0.01)
+            elif isinstance(m, nn.BatchNorm2d):
+                nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, mode="fan_in", nonlinearity="relu")
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
 
 
-def get_cifar10_loaders_zfnet(batch_size=64):
-    """
-    CIFAR-10 loaders with 224×224 spatial size for ZFNet.
-
-    Why upsample?
-        ZFNet/AlexNet stems expect ~ImageNet-scale inputs. CIFAR is 32×32; we
-        Resize to 224×224 so the first conv sees a compatible receptive-field
-        layout (assignment-appropriate compromise vs. training on full ImageNet).
-
-    Training transforms:
-        Resize((224,224), bilinear): PIL 32×32 -> 224×224 (tensor later [3,224,224])
-        RandomHorizontalFlip: label-preserving augmentation
-        RandomCrop(224, padding=8): small jitters at full resolution
-        ToTensor: -> float [0,1], shape [3,224,224]
-        Normalize(CIFAR mean/std): same stats as LeNet for comparability
-
-    Test transforms:
-        Resize + ToTensor + Normalize (no random geometry)
-
-    Returns:
-        train_loader / test_loader yielding:
-            images: [batch_size, 3, 224, 224]
-            labels: [batch_size]
-    """
+def get_stl10_loaders_zfnet(batch_size=96, input_size=64):
+    """Create STL-10 train and test loaders for ZFNet."""
+    # Keep more spatial detail than LeNet-5 while remaining practical on CPU.
     train_transform = transforms.Compose(
         [
             transforms.Resize(
-                (224, 224),
+                (input_size, input_size),
                 interpolation=transforms.InterpolationMode.BILINEAR,
             ),
             transforms.RandomHorizontalFlip(),
-            transforms.RandomCrop(224, padding=8),
+            transforms.RandomCrop(input_size, padding=6),
             transforms.ToTensor(),
-            transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD),
+            transforms.Normalize(STL10_MEAN, STL10_STD),
         ]
     )
 
+    # Test preprocessing mirrors training resolution without random augmentation.
     test_transform = transforms.Compose(
         [
             transforms.Resize(
-                (224, 224),
+                (input_size, input_size),
                 interpolation=transforms.InterpolationMode.BILINEAR,
             ),
             transforms.ToTensor(),
-            transforms.Normalize(CIFAR10_MEAN, CIFAR10_STD),
+            transforms.Normalize(STL10_MEAN, STL10_STD),
         ]
     )
 
-    train_dataset = torchvision.datasets.CIFAR10(
-        root="./data", train=True, download=True, transform=train_transform
+    train_dataset = torchvision.datasets.STL10(
+        root="./data", split="train", download=True, transform=train_transform
     )
-    test_dataset = torchvision.datasets.CIFAR10(
-        root="./data", train=False, download=True, transform=test_transform
+    test_dataset = torchvision.datasets.STL10(
+        root="./data", split="test", download=True, transform=test_transform
     )
 
     _pin = torch.cuda.is_available()
@@ -208,28 +185,24 @@ def get_cifar10_loaders_zfnet(batch_size=64):
 
     print(f"[INFO] Training samples : {len(train_dataset)}")
     print(f"[INFO] Test samples     : {len(test_dataset)}")
-    print("[INFO] ZFNet pipeline: spatial size 224×224 (upsampled from 32×32).")
+    print(f"[INFO] ZFNet pipeline: STL-10 at {input_size}×{input_size}.")
 
     return train_loader, test_loader
 
 
 def train_one_epoch(model, loader, criterion, optimizer, device):
-    """
-    Single training epoch. Batch tensors:
-        images: [B, 3, 224, 224]
-        labels: [B]
-        logits: [B, 10]
-    """
+    """Run one training epoch."""
     model.train()
 
     running_loss = 0.0
     correct = 0
     total = 0
 
-    for batch_idx, (images, labels) in enumerate(loader):
+    for images, labels in loader:
         images = images.to(device, non_blocking=True)
         labels = labels.to(device, non_blocking=True)
 
+        # Standard supervised update: forward -> loss -> backward -> optimizer step.
         optimizer.zero_grad(set_to_none=True)
         outputs = model(images)
         loss = criterion(outputs, labels)
@@ -248,9 +221,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
 
 
 def evaluate(model, loader, criterion, device):
-    """
-    Evaluation loop; dropout disabled via model.eval() so full width is used.
-    """
+    """Evaluate the model on a data loader."""
     model.eval()
     running_loss = 0.0
     correct = 0
@@ -278,31 +249,25 @@ def train_model(
     model,
     train_loader,
     test_loader,
-    num_epochs=50,
+    num_epochs=40,
     model_name="ZFNet",
     device=None,
 ):
-    """
-    Train ZFNet with SGD + StepLR; track metrics; save best test checkpoint.
-
-    Checkpoint:
-        checkpoints/zfnet_best.pth — weights when test accuracy improved most.
-
-    If device is None, inferred from model parameters.
-    """
+    """Train ZFNet and return per-epoch loss/accuracy history."""
     if device is None:
         device = next(model.parameters()).device
 
     criterion = nn.CrossEntropyLoss()
 
-    optimizer = optim.SGD(
+    # AdamW converges faster than plain SGD for this compact ZFNet variant.
+    optimizer = optim.AdamW(
         model.parameters(),
-        lr=0.01,
-        momentum=0.9,
-        weight_decay=5e-4,
+        lr=1e-3,
+        weight_decay=1e-4,
     )
 
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=20, gamma=0.1)
+    # Cosine decay gradually reduces the learning rate across the full run.
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=num_epochs)
 
     history = {
         "train_loss": [],
@@ -312,18 +277,22 @@ def train_model(
     }
 
     print("\n" + "=" * 60)
-    print(f"  Training {model_name} on CIFAR-10 (224×224)")
+    print(
+        f"  Training {model_name} on STL-10 "
+        f"({model.input_size}×{model.input_size})"
+    )
     print("=" * 60)
     print(f"  Epochs      : {num_epochs}")
     print(f"  Batch Size  : {train_loader.batch_size}")
-    print(f"  Optimizer   : SGD (lr=0.01, momentum=0.9, wd=5e-4)")
-    print(f"  Scheduler   : StepLR (step=20, gamma=0.1)")
+    print(f"  Optimizer   : AdamW (lr=1e-3, wd=1e-4)")
+    print(f"  Scheduler   : CosineAnnealingLR")
     print(f"  Device      : {device}")
     print("=" * 60 + "\n")
 
     best_acc = 0.0
 
     for epoch in range(1, num_epochs + 1):
+        current_lr = optimizer.param_groups[0]["lr"]
         train_loss, train_acc = train_one_epoch(
             model, train_loader, criterion, optimizer, device
         )
@@ -339,7 +308,8 @@ def train_model(
             print(
                 f"Epoch [{epoch:3d}/{num_epochs}] | "
                 f"Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | "
-                f"Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.2f}%"
+                f"Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.2f}% | "
+                f"LR: {current_lr:.6f}"
             )
 
         if test_acc > best_acc:
@@ -352,13 +322,13 @@ def train_model(
     return history
 
 
-def plot_training_curves(history, model_name="ZFNet", save_path=None):
-    """Plot train/test loss and accuracy vs. epoch (lists in history dict)."""
+def plot_training_curves(history, model_name="ZFNet", save_path=None, show=True):
+    """Plot loss and accuracy curves."""
     epochs = range(1, len(history["train_loss"]) + 1)
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
     fig.suptitle(
-        f"{model_name} — Training Curves (CIFAR-10)",
+        f"{model_name} — Training Curves (STL-10)",
         fontsize=14,
         fontweight="bold",
     )
@@ -385,7 +355,9 @@ def plot_training_curves(history, model_name="ZFNet", save_path=None):
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
         print(f"[INFO] Plot saved to {save_path}")
 
-    plt.show()
+    if show:
+        plt.show()
+    plt.close(fig)
 
 
 def show_sample_predictions(
@@ -395,17 +367,19 @@ def show_sample_predictions(
     num_samples=10,
     model_name="ZFNet",
     save_path="zfnet_predictions.png",
+    show=True,
 ):
-    """Qualitative grid; images denormalized from CIFAR stats for display."""
+    """Plot sample predictions from the test set."""
+    # STL-10 class order from torchvision.datasets.STL10.
     classes = [
         "airplane",
-        "automobile",
         "bird",
+        "car",
         "cat",
         "deer",
         "dog",
-        "frog",
         "horse",
+        "monkey",
         "ship",
         "truck",
     ]
@@ -418,14 +392,15 @@ def show_sample_predictions(
         outputs = model(images_dev)
         _, preds = outputs.max(1)
 
-    mean = torch.tensor(CIFAR10_MEAN).view(3, 1, 1)
-    std = torch.tensor(CIFAR10_STD).view(3, 1, 1)
+    # Undo normalization so matplotlib receives displayable RGB values.
+    mean = torch.tensor(STL10_MEAN).view(3, 1, 1)
+    std = torch.tensor(STL10_STD).view(3, 1, 1)
     imgs = images[:num_samples] * std + mean
     imgs = imgs.clamp(0, 1).permute(0, 2, 3, 1).numpy()
 
     fig, axes = plt.subplots(2, 5, figsize=(14, 6))
     fig.suptitle(
-        f"{model_name} — Sample Predictions on CIFAR-10",
+        f"{model_name} — Sample Predictions on STL-10",
         fontsize=13,
         fontweight="bold",
     )
@@ -441,24 +416,21 @@ def show_sample_predictions(
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     print(f"[INFO] Predictions figure saved to {save_path}")
-    plt.show()
+    if show:
+        plt.show()
+    plt.close(fig)
 
 
 def compare_architectures(
-    lenet_history, zfnet_history, save_path="comparison_curves.png"
+    lenet_history, zfnet_history, save_path="comparison_curves.png", show=True
 ):
-    """
-    Overlay LeNet-5 vs ZFNet test metrics by epoch.
-
-    Note: curves are comparable in *trend*; absolute epoch index assumes both
-    histories used the same number of epochs when generating the JSON.
-    """
+    """Plot LeNet-5 and ZFNet test curves together."""
     epochs_l = range(1, len(lenet_history["test_acc"]) + 1)
     epochs_z = range(1, len(zfnet_history["test_acc"]) + 1)
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
     fig.suptitle(
-        "LeNet-5 vs ZFNet — Comparison on CIFAR-10",
+        "LeNet-5 vs ZFNet — Comparison on STL-10",
         fontsize=14,
         fontweight="bold",
     )
@@ -482,25 +454,31 @@ def compare_architectures(
     plt.tight_layout()
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     print(f"[INFO] Comparison plot saved to {save_path}")
-    plt.show()
+    if show:
+        plt.show()
+    plt.close(fig)
 
 
 def count_parameters(model):
-    """Return and print total trainable parameter count."""
+    """Print and return the number of trainable parameters."""
     total = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"[INFO] Total trainable parameters: {total:,}")
     return total
 
 
 def main():
-    """Standalone ZFNet training script entry point."""
-    BATCH_SIZE = 64
-    NUM_EPOCHS = 50
+    """Run the standalone ZFNet training script."""
+    BATCH_SIZE = 96
+    NUM_EPOCHS = 40
     NUM_CLASSES = 10
+    INPUT_SIZE = 64
 
-    train_loader, test_loader = get_cifar10_loaders_zfnet(batch_size=BATCH_SIZE)
+    # End-to-end standalone run: data -> train -> save weights/plots/history.
+    train_loader, test_loader = get_stl10_loaders_zfnet(
+        batch_size=BATCH_SIZE, input_size=INPUT_SIZE
+    )
 
-    model = ZFNet(num_classes=NUM_CLASSES).to(device)
+    model = ZFNet(num_classes=NUM_CLASSES, input_size=INPUT_SIZE).to(device)
     print("\n[MODEL SUMMARY — ZFNet]")
     print(model)
     count_parameters(model)
@@ -515,15 +493,26 @@ def main():
     )
 
     os.makedirs("checkpoints", exist_ok=True)
-    torch.save(model.state_dict(), "checkpoints/zfnet_final.pth")
-    print("[INFO] Final model saved to checkpoints/zfnet_final.pth")
+    os.makedirs("outputs", exist_ok=True)
+    torch.save(model.state_dict(), "checkpoints/zfnet_stl10_final.pth")
+    print("[INFO] Final model saved to checkpoints/zfnet_stl10_final.pth")
 
     plot_training_curves(
-        history, model_name="ZFNet", save_path="zfnet_training_curves.png"
+        history,
+        model_name="ZFNet",
+        save_path="outputs/zfnet_curves.png",
+        show=False,
     )
     show_sample_predictions(
-        model, test_loader, device, save_path="zfnet_predictions.png"
+        model,
+        test_loader,
+        device,
+        save_path="outputs/zfnet_predictions.png",
+        show=False,
     )
+
+    with open("outputs/zfnet_history.json", "w") as f:
+        json.dump(history, f, indent=2)
 
 
 if __name__ == "__main__":

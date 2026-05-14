@@ -1,4 +1,4 @@
-"""End-to-end LeNet-5 and ZFNet training pipeline for CIFAR-10."""
+"""End-to-end LeNet-5 and ZFNet training pipeline for STL-10."""
 
 import argparse
 import json
@@ -8,7 +8,7 @@ import torch
 
 from lenet5 import (
     LeNet5,
-    get_cifar10_loaders,
+    get_stl10_loaders,
     train_model as train_lenet,
     plot_training_curves,
     show_sample_predictions,
@@ -17,7 +17,7 @@ from lenet5 import (
 
 from zfnet import (
     ZFNet,
-    get_cifar10_loaders_zfnet,
+    get_stl10_loaders_zfnet,
     train_model as train_zfnet,
     compare_architectures,
     count_parameters as count_zf_params,
@@ -29,13 +29,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def save_history(history, path):
-    """
-    Serialize training curves to JSON (lists of floats per epoch).
-
-    Args:
-        history: dict with keys train_loss, train_acc, test_loss, test_acc
-        path: e.g. outputs/lenet5_history.json
-    """
+    """Save a history dictionary as JSON."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w") as f:
         json.dump(history, f, indent=2)
@@ -43,23 +37,19 @@ def save_history(history, path):
 
 
 def load_history(path):
-    """Load a history dict written by save_history."""
+    """Load a saved history dictionary."""
     with open(path, "r") as f:
         return json.load(f)
 
 
 def run_lenet():
-    """
-    Full LeNet-5 pipeline: data (32×32) -> train -> plot -> checkpoint -> JSON.
-
-    Returns:
-        history dict for optional in-memory comparison.
-    """
+    """Run the full LeNet-5 pipeline."""
     print("\n" + "#" * 60)
     print("#  LENET-5 TRAINING")
     print("#" * 60)
 
-    train_loader, test_loader = get_cifar10_loaders(batch_size=128)
+    # Build loaders, train the model, then save plots/weights/history.
+    train_loader, test_loader = get_stl10_loaders(batch_size=128)
 
     model = LeNet5(num_classes=10).to(device)
     count_parameters(model)
@@ -68,13 +58,16 @@ def run_lenet():
         model,
         train_loader,
         test_loader,
-        num_epochs=50,
+        num_epochs=30,
         model_name="LeNet-5",
         device=device,
     )
 
     plot_training_curves(
-        history, model_name="LeNet-5", save_path="outputs/lenet5_curves.png"
+        history,
+        model_name="LeNet-5",
+        save_path="outputs/lenet5_curves.png",
+        show=False,
     )
 
     show_sample_predictions(
@@ -83,10 +76,11 @@ def run_lenet():
         device,
         model_name="LeNet-5",
         save_path="outputs/lenet5_predictions.png",
+        show=False,
     )
 
-    torch.save(model.state_dict(), "checkpoints/lenet5_cifar10.pth")
-    print("[INFO] Weights saved to checkpoints/lenet5_cifar10.pth")
+    torch.save(model.state_dict(), "checkpoints/lenet5_stl10.pth")
+    print("[INFO] Weights saved to checkpoints/lenet5_stl10.pth")
 
     os.makedirs("outputs", exist_ok=True)
     save_history(history, "outputs/lenet5_history.json")
@@ -95,29 +89,31 @@ def run_lenet():
 
 
 def run_zfnet():
-    """
-    Full ZFNet pipeline: data (224×224) -> train -> plot -> checkpoint -> JSON.
-    """
+    """Run the full ZFNet pipeline."""
     print("\n" + "#" * 60)
     print("#  ZFNET TRAINING")
     print("#" * 60)
 
-    train_loader, test_loader = get_cifar10_loaders_zfnet(batch_size=64)
+    # Build loaders, train the model, then save plots/weights/history.
+    train_loader, test_loader = get_stl10_loaders_zfnet(batch_size=96, input_size=64)
 
-    model = ZFNet(num_classes=10).to(device)
+    model = ZFNet(num_classes=10, input_size=64).to(device)
     count_zf_params(model)
 
     history = train_zfnet(
         model,
         train_loader,
         test_loader,
-        num_epochs=50,
+        num_epochs=40,
         model_name="ZFNet",
         device=device,
     )
 
     plot_zf_curves(
-        history, model_name="ZFNet", save_path="outputs/zfnet_curves.png"
+        history,
+        model_name="ZFNet",
+        save_path="outputs/zfnet_curves.png",
+        show=False,
     )
 
     show_zf_predictions(
@@ -126,7 +122,11 @@ def run_zfnet():
         device,
         model_name="ZFNet",
         save_path="outputs/zfnet_predictions.png",
+        show=False,
     )
+
+    torch.save(model.state_dict(), "checkpoints/zfnet_stl10_final.pth")
+    print("[INFO] Final weights saved to checkpoints/zfnet_stl10_final.pth")
 
     os.makedirs("outputs", exist_ok=True)
     save_history(history, "outputs/zfnet_history.json")
@@ -135,17 +135,13 @@ def run_zfnet():
 
 
 def print_summary(lenet_history, zfnet_history):
-    """
-    Text table comparing best/final metrics and architecture metadata.
-
-    Parameter counts are computed from fresh module definitions (no checkpoint
-    needed) so the table stays accurate if hyperparameters change.
-    """
+    """Print a summary table for both models."""
+    # Recompute parameter counts from the current model definitions.
     n_lenet = sum(p.numel() for p in LeNet5().parameters() if p.requires_grad)
     n_zf = sum(p.numel() for p in ZFNet().parameters() if p.requires_grad)
 
     print("\n" + "=" * 65)
-    print("  FINAL RESULTS SUMMARY — CIFAR-10")
+    print("  FINAL RESULTS SUMMARY — STL-10")
     print("=" * 65)
     print(f"{'Metric':<30} {'LeNet-5':>15} {'ZFNet':>15}")
     print("-" * 65)
@@ -167,8 +163,8 @@ def print_summary(lenet_history, zfnet_history):
             f"{zfnet_history['test_loss'][-1]:.4f}",
         ),
         ("Parameters", f"{n_lenet:,}", f"{n_zf:,}"),
-        ("Input Size", "32x32", "224x224"),
-        ("Batch Size", "128", "64"),
+        ("Input Size", "32x32", "64x64"),
+        ("Batch Size", "128", "96"),
     ]
 
     for name, l_val, z_val in metrics:
@@ -178,9 +174,9 @@ def print_summary(lenet_history, zfnet_history):
 
 
 def main():
-    """Parse CLI flags and dispatch training / comparison."""
+    """Parse CLI flags and run the requested workflow."""
     parser = argparse.ArgumentParser(
-        description="Train LeNet-5 and/or ZFNet on CIFAR-10"
+        description="Train LeNet-5 and/or ZFNet on STL-10"
     )
     parser.add_argument("--lenet", action="store_true", help="Train LeNet-5 only")
     parser.add_argument("--zfnet", action="store_true", help="Train ZFNet only")
@@ -194,11 +190,12 @@ def main():
     os.makedirs("outputs", exist_ok=True)
     os.makedirs("checkpoints", exist_ok=True)
 
+    # Compare-only mode reuses saved JSON histories and skips training.
     if args.compare:
         lenet_h = load_history("outputs/lenet5_history.json")
         zfnet_h = load_history("outputs/zfnet_history.json")
         compare_architectures(
-            lenet_h, zfnet_h, save_path="outputs/comparison_curves.png"
+            lenet_h, zfnet_h, save_path="outputs/comparison_curves.png", show=False
         )
         print_summary(lenet_h, zfnet_h)
 
@@ -209,10 +206,14 @@ def main():
         run_zfnet()
 
     else:
+        # Default behavior runs both models and then produces a comparison plot.
         lenet_history = run_lenet()
         zfnet_history = run_zfnet()
         compare_architectures(
-            lenet_history, zfnet_history, save_path="outputs/comparison_curves.png"
+            lenet_history,
+            zfnet_history,
+            save_path="outputs/comparison_curves.png",
+            show=False,
         )
         print_summary(lenet_history, zfnet_history)
 

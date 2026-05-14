@@ -1,7 +1,7 @@
 torch>=2.0.0
 torchvision>=0.15.0
 matplotlib>=3.5.0
-# Upper bound avoids NumPy 2.4+ VisibleDeprecationWarning in torchvision CIFAR-10 loader (pickle).
+# Upper bound keeps torchvision dataset loading warnings under control.
 numpy>=1.21.0,<2.4
 jupyter>=1.0.0
 ipykernel>=6.0.0
