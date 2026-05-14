@@ -1,4 +1,10 @@
-"""Compact ZFNet-style training pipeline for STL-10."""
+"""Compact ZFNet-style training pipeline for STL-10.
+
+This module implements a deeper CNN than the LeNet baseline while keeping the
+training setup practical for local experimentation. The project uses a compact
+ZFNet-inspired design rather than a verbatim historical replica so that STL-10
+training remains feasible on a laptop CPU or a modest GPU.
+"""
 
 import torch
 import torch.nn as nn
@@ -10,9 +16,23 @@ import matplotlib.pyplot as plt
 import numpy as np
 import json
 import os
+from typing import TypeAlias
 
 STL10_MEAN = (0.507, 0.487, 0.441)
 STL10_STD = (0.267, 0.256, 0.276)
+STL10_CLASSES = [
+    "airplane",
+    "bird",
+    "car",
+    "cat",
+    "deer",
+    "dog",
+    "horse",
+    "monkey",
+    "ship",
+    "truck",
+]
+History: TypeAlias = dict[str, list[float]]
 
 # Keep runs reproducible for report figures and metric comparisons.
 torch.manual_seed(42)
@@ -25,9 +45,14 @@ _NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "2"))
 
 
 class ZFNet(nn.Module):
-    """Compact ZFNet-style CNN for 64x64 STL-10 inputs."""
+    """Compact ZFNet-style CNN for 64x64 STL-10 inputs.
 
-    def __init__(self, num_classes=10, input_size=64):
+    The model keeps the spirit of ZFNet with progressively deeper convolutional
+    blocks, but trims the classifier so the project can be trained repeatedly
+    for coursework and report generation.
+    """
+
+    def __init__(self, num_classes: int = 10, input_size: int = 64) -> None:
         super().__init__()
         self.input_size = input_size
 
@@ -98,7 +123,7 @@ class ZFNet(nn.Module):
 
         self._initialize_weights()
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Map `[batch, 3, 64, 64]` images to `[batch, num_classes]` logits."""
         x = self.features(x)
         x = self.pool(x)
@@ -106,15 +131,15 @@ class ZFNet(nn.Module):
         x = self.classifier(x)
         return x
 
-    def _infer_flatten_dim(self):
+    def _infer_flatten_dim(self) -> int:
         """Infer classifier input width from the current feature extractor."""
         with torch.no_grad():
             dummy = torch.zeros(1, 3, self.input_size, self.input_size)
             feats = self.pool(self.features(dummy))
             return feats.view(1, -1).size(1)
 
-    def _initialize_weights(self):
-        """Initialize layers."""
+    def _initialize_weights(self) -> None:
+        """Initialize layers with Kaiming-friendly defaults."""
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
@@ -129,8 +154,15 @@ class ZFNet(nn.Module):
                     nn.init.constant_(m.bias, 0)
 
 
-def get_stl10_loaders_zfnet(batch_size=96, input_size=64):
-    """Create STL-10 train and test loaders for ZFNet."""
+def get_stl10_loaders_zfnet(
+    batch_size: int = 96,
+    input_size: int = 64,
+) -> tuple[DataLoader, DataLoader]:
+    """Create STL-10 train and test loaders for ZFNet.
+
+    ZFNet benefits from a larger input size than LeNet-5, so the project keeps
+    64x64 inputs here to preserve more texture and shape information.
+    """
     # Keep more spatial detail than LeNet-5 while remaining practical on CPU.
     train_transform = transforms.Compose(
         [
@@ -190,8 +222,14 @@ def get_stl10_loaders_zfnet(batch_size=96, input_size=64):
     return train_loader, test_loader
 
 
-def train_one_epoch(model, loader, criterion, optimizer, device):
-    """Run one training epoch."""
+def train_one_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: nn.Module,
+    optimizer: optim.Optimizer,
+    device: torch.device,
+) -> tuple[float, float]:
+    """Run one training epoch and return average loss and accuracy."""
     model.train()
 
     running_loss = 0.0
@@ -220,8 +258,13 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
     return avg_loss, accuracy
 
 
-def evaluate(model, loader, criterion, device):
-    """Evaluate the model on a data loader."""
+def evaluate(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: nn.Module,
+    device: torch.device,
+) -> tuple[float, float]:
+    """Evaluate the model on a data loader without updating parameters."""
     model.eval()
     running_loss = 0.0
     correct = 0
@@ -246,14 +289,18 @@ def evaluate(model, loader, criterion, device):
 
 
 def train_model(
-    model,
-    train_loader,
-    test_loader,
-    num_epochs=40,
-    model_name="ZFNet",
-    device=None,
-):
-    """Train ZFNet and return per-epoch loss/accuracy history."""
+    model: ZFNet,
+    train_loader: DataLoader,
+    test_loader: DataLoader,
+    num_epochs: int = 40,
+    model_name: str = "ZFNet",
+    device: torch.device | None = None,
+) -> History:
+    """Train ZFNet and return per-epoch loss/accuracy history.
+
+    Compared with LeNet-5, this run uses AdamW and cosine annealing because the
+    deeper network benefits from smoother optimization and LR decay.
+    """
     if device is None:
         device = next(model.parameters()).device
 
@@ -315,6 +362,7 @@ def train_model(
         if test_acc > best_acc:
             best_acc = test_acc
             os.makedirs("checkpoints", exist_ok=True)
+            # Keep the strongest validation snapshot, not just the final epoch.
             torch.save(model.state_dict(), "checkpoints/zfnet_best.pth")
             print(f"  [CHECKPOINT] New best test accuracy: {best_acc:.2f}%")
 
@@ -322,8 +370,13 @@ def train_model(
     return history
 
 
-def plot_training_curves(history, model_name="ZFNet", save_path=None, show=True):
-    """Plot loss and accuracy curves."""
+def plot_training_curves(
+    history: History,
+    model_name: str = "ZFNet",
+    save_path: str | None = None,
+    show: bool = True,
+) -> None:
+    """Plot training and test loss/accuracy curves for a ZFNet run."""
     epochs = range(1, len(history["train_loss"]) + 1)
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
@@ -352,6 +405,7 @@ def plot_training_curves(history, model_name="ZFNet", save_path=None, show=True)
     plt.tight_layout()
 
     if save_path:
+        os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
         print(f"[INFO] Plot saved to {save_path}")
 
@@ -361,28 +415,15 @@ def plot_training_curves(history, model_name="ZFNet", save_path=None, show=True)
 
 
 def show_sample_predictions(
-    model,
-    test_loader,
-    device,
-    num_samples=10,
-    model_name="ZFNet",
-    save_path="zfnet_predictions.png",
-    show=True,
-):
-    """Plot sample predictions from the test set."""
-    # STL-10 class order from torchvision.datasets.STL10.
-    classes = [
-        "airplane",
-        "bird",
-        "car",
-        "cat",
-        "deer",
-        "dog",
-        "horse",
-        "monkey",
-        "ship",
-        "truck",
-    ]
+    model: nn.Module,
+    test_loader: DataLoader,
+    device: torch.device,
+    num_samples: int = 10,
+    model_name: str = "ZFNet",
+    save_path: str = "zfnet_predictions.png",
+    show: bool = True,
+) -> None:
+    """Plot sample predictions from the STL-10 test set."""
 
     model.eval()
     images, labels = next(iter(test_loader))
@@ -407,13 +448,14 @@ def show_sample_predictions(
 
     for i, ax in enumerate(axes.flat):
         ax.imshow(imgs[i])
-        pred = classes[preds[i].item()]
-        truth = classes[labels[i].item()]
+        pred = STL10_CLASSES[preds[i].item()]
+        truth = STL10_CLASSES[labels[i].item()]
         color = "green" if pred == truth else "red"
         ax.set_title(f"Pred: {pred}\nTrue: {truth}", color=color, fontsize=9)
         ax.axis("off")
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     print(f"[INFO] Predictions figure saved to {save_path}")
     if show:
@@ -422,9 +464,16 @@ def show_sample_predictions(
 
 
 def compare_architectures(
-    lenet_history, zfnet_history, save_path="comparison_curves.png", show=True
-):
-    """Plot LeNet-5 and ZFNet test curves together."""
+    lenet_history: History,
+    zfnet_history: History,
+    save_path: str = "comparison_curves.png",
+    show: bool = True,
+) -> None:
+    """Plot LeNet-5 and ZFNet test curves together.
+
+    This comparison intentionally focuses on test curves because they are the
+    most useful signal when discussing generalization in the report.
+    """
     epochs_l = range(1, len(lenet_history["test_acc"]) + 1)
     epochs_z = range(1, len(zfnet_history["test_acc"]) + 1)
 
@@ -452,6 +501,7 @@ def compare_architectures(
     ax2.grid(True, alpha=0.3)
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     print(f"[INFO] Comparison plot saved to {save_path}")
     if show:
@@ -459,15 +509,19 @@ def compare_architectures(
     plt.close(fig)
 
 
-def count_parameters(model):
+def count_parameters(model: nn.Module) -> int:
     """Print and return the number of trainable parameters."""
     total = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"[INFO] Total trainable parameters: {total:,}")
     return total
 
 
-def main():
-    """Run the standalone ZFNet training script."""
+def main() -> None:
+    """Run the standalone ZFNet training script.
+
+    This path is useful when the project needs to regenerate only the ZFNet
+    outputs without invoking the combined workflow in `main.py`.
+    """
     BATCH_SIZE = 96
     NUM_EPOCHS = 40
     NUM_CLASSES = 10

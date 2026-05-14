@@ -1,4 +1,13 @@
-"""LeNet-5 training pipeline for STL-10."""
+"""LeNet-5 training pipeline for STL-10.
+
+The original LeNet-5 was designed for small grayscale images. This project
+adapts the architecture to STL-10 by:
+
+- accepting 3-channel RGB inputs,
+- resizing images to 32x32,
+- keeping the classic conv-pool-conv-pool-conv pattern, and
+- using a lightweight classifier head suitable for a CPU-friendly baseline.
+"""
 
 import torch
 import torch.nn as nn
@@ -10,9 +19,23 @@ import matplotlib.pyplot as plt
 import numpy as np
 import json
 import os
+from typing import TypeAlias
 
 STL10_MEAN = (0.507, 0.487, 0.441)
 STL10_STD = (0.267, 0.256, 0.276)
+STL10_CLASSES = [
+    "airplane",
+    "bird",
+    "car",
+    "cat",
+    "deer",
+    "dog",
+    "horse",
+    "monkey",
+    "ship",
+    "truck",
+]
+History: TypeAlias = dict[str, list[float]]
 
 # Keep runs reproducible for report figures and metric comparisons.
 torch.manual_seed(42)
@@ -25,12 +48,17 @@ _NUM_WORKERS = int(os.environ.get("NUM_WORKERS", "2"))
 
 
 class LeNet5(nn.Module):
-    """LeNet-5 adapted for 32x32 RGB STL-10 inputs."""
+    """LeNet-5 adapted for 32x32 RGB STL-10 inputs.
 
-    def __init__(self, num_classes=10):
+    The layer naming follows the classic LeNet-5 convention (`c1`, `s2`, ...)
+    so the architecture remains easy to map back to the textbook model.
+    """
+
+    def __init__(self, num_classes: int = 10) -> None:
         super().__init__()
 
         # Feature extractor: 32x32 -> 28x28 -> 14x14 -> 10x10 -> 5x5 -> 1x1.
+        # We keep tanh activations to stay close to the original LeNet design.
         self.c1 = nn.Conv2d(
             in_channels=3,
             out_channels=6,
@@ -64,7 +92,7 @@ class LeNet5(nn.Module):
         self.output = nn.Linear(in_features=84, out_features=num_classes)
         self.tanh = nn.Tanh()
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Map `[batch, 3, 32, 32]` images to `[batch, num_classes]` logits."""
         x = self.tanh(self.c1(x))
         x = self.s2(x)
@@ -78,8 +106,12 @@ class LeNet5(nn.Module):
         return x
 
 
-def get_stl10_loaders(batch_size=128):
-    """Create STL-10 train and test loaders for LeNet-5."""
+def get_stl10_loaders(batch_size: int = 128) -> tuple[DataLoader, DataLoader]:
+    """Create STL-10 train and test loaders for LeNet-5.
+
+    Training includes simple spatial augmentation to reduce overfitting, while
+    evaluation uses deterministic preprocessing so test metrics remain stable.
+    """
 
     # Resize STL-10 to the spatial size expected by the original LeNet-5 design.
     train_transform = transforms.Compose(
@@ -134,8 +166,14 @@ def get_stl10_loaders(batch_size=128):
     return train_loader, test_loader
 
 
-def train_one_epoch(model, loader, criterion, optimizer, device):
-    """Run one training epoch."""
+def train_one_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: nn.Module,
+    optimizer: optim.Optimizer,
+    device: torch.device,
+) -> tuple[float, float]:
+    """Run one training epoch and return average loss and accuracy."""
     model.train()
 
     running_loss = 0.0
@@ -164,8 +202,13 @@ def train_one_epoch(model, loader, criterion, optimizer, device):
     return avg_loss, accuracy
 
 
-def evaluate(model, loader, criterion, device):
-    """Evaluate the model on a data loader."""
+def evaluate(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: nn.Module,
+    device: torch.device,
+) -> tuple[float, float]:
+    """Evaluate the model on a data loader without gradient updates."""
     model.eval()
     running_loss = 0.0
     correct = 0
@@ -190,14 +233,18 @@ def evaluate(model, loader, criterion, device):
 
 
 def train_model(
-    model,
-    train_loader,
-    test_loader,
-    num_epochs=50,
-    model_name="LeNet-5",
-    device=None,
-):
-    """Train LeNet-5 and return per-epoch loss/accuracy history."""
+    model: nn.Module,
+    train_loader: DataLoader,
+    test_loader: DataLoader,
+    num_epochs: int = 50,
+    model_name: str = "LeNet-5",
+    device: torch.device | None = None,
+) -> History:
+    """Train LeNet-5 and return per-epoch loss/accuracy history.
+
+    The history dictionary is the common contract shared by the notebook,
+    plotting functions, and the `main.py --compare` workflow.
+    """
     if device is None:
         device = next(model.parameters()).device
 
@@ -255,8 +302,13 @@ def train_model(
     return history
 
 
-def plot_training_curves(history, model_name="LeNet-5", save_path=None, show=True):
-    """Plot loss and accuracy curves."""
+def plot_training_curves(
+    history: History,
+    model_name: str = "LeNet-5",
+    save_path: str | None = None,
+    show: bool = True,
+) -> None:
+    """Plot training and test loss/accuracy curves for a LeNet run."""
     epochs = range(1, len(history["train_loss"]) + 1)
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
@@ -285,6 +337,7 @@ def plot_training_curves(history, model_name="LeNet-5", save_path=None, show=Tru
     plt.tight_layout()
 
     if save_path:
+        os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
         plt.savefig(save_path, dpi=150, bbox_inches="tight")
         print(f"[INFO] Plot saved to {save_path}")
 
@@ -294,28 +347,15 @@ def plot_training_curves(history, model_name="LeNet-5", save_path=None, show=Tru
 
 
 def show_sample_predictions(
-    model,
-    test_loader,
-    device,
-    num_samples=10,
-    model_name="LeNet-5",
-    save_path="lenet5_predictions.png",
-    show=True,
-):
-    """Plot sample predictions from the test set."""
-    # STL-10 class order from torchvision.datasets.STL10.
-    classes = [
-        "airplane",
-        "bird",
-        "car",
-        "cat",
-        "deer",
-        "dog",
-        "horse",
-        "monkey",
-        "ship",
-        "truck",
-    ]
+    model: nn.Module,
+    test_loader: DataLoader,
+    device: torch.device,
+    num_samples: int = 10,
+    model_name: str = "LeNet-5",
+    save_path: str = "lenet5_predictions.png",
+    show: bool = True,
+) -> None:
+    """Plot sample predictions from the STL-10 test set."""
 
     model.eval()
     images, labels = next(iter(test_loader))
@@ -340,13 +380,14 @@ def show_sample_predictions(
 
     for i, ax in enumerate(axes.flat):
         ax.imshow(imgs[i])
-        pred = classes[preds[i].item()]
-        truth = classes[labels[i].item()]
+        pred = STL10_CLASSES[preds[i].item()]
+        truth = STL10_CLASSES[labels[i].item()]
         color = "green" if pred == truth else "red"
         ax.set_title(f"Pred: {pred}\nTrue: {truth}", color=color, fontsize=9)
         ax.axis("off")
 
     plt.tight_layout()
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     print(f"[INFO] Predictions figure saved to {save_path}")
     if show:
@@ -354,15 +395,19 @@ def show_sample_predictions(
     plt.close(fig)
 
 
-def count_parameters(model):
+def count_parameters(model: nn.Module) -> int:
     """Print and return the number of trainable parameters."""
     total = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"[INFO] Total trainable parameters: {total:,}")
     return total
 
 
-def main():
-    """Run the standalone LeNet-5 training script."""
+def main() -> None:
+    """Run the standalone LeNet-5 training script.
+
+    This entry point is useful when the project needs only the LeNet baseline,
+    without invoking the combined workflow in `main.py`.
+    """
     BATCH_SIZE = 128
     NUM_EPOCHS = 30
     NUM_CLASSES = 10

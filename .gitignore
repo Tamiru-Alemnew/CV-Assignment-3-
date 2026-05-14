@@ -11,7 +11,14 @@ __pycache__/
 
 # Project artifacts (regenerate with scripts)
 data/
-outputs/
+outputs/*
+!outputs/comparison_curves.png
+!outputs/lenet5_curves.png
+!outputs/lenet5_history.json
+!outputs/lenet5_predictions.png
+!outputs/zfnet_curves.png
+!outputs/zfnet_history.json
+!outputs/zfnet_predictions.png
 checkpoints/
 *.pth
 
